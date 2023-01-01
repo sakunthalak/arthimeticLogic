@@ -1,0 +1,8 @@
+public class Arithmetic {
+
+public void addition (int a, int b) {
+system.println("From Addition method");
+return a+b;
+
+}
+}
