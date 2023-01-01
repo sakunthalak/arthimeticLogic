@@ -1,0 +1,88 @@
+name: Chrome release workflow
+
+on:
+  push:
+    branches: [ master ]
+
+  workflow_dispatch:
+    inputs:
+      releasetype:
+        description: 'release type'
+        required: false
+        default: 'minor'
+
+
+jobs:
+  releaseartifacts:
+    #validating the condition
+    #if: ${{ github.actor != 'sagepeople-ci' }}
+    runs-on: ubuntu-latest
+
+    env:
+      JAVA_VERSION: "12"
+      PACKAGEURL: "https://maven.pkg.github.com/sakunthalak/*"
+
+    steps:
+      - uses: actions/checkout@v2
+          #vwith:
+        #vtoken: ${{ secrets.CI_GITHUBTOKEN }}
+
+      - name: set up java 12
+        uses: actions/setup-java@v1
+        with:
+          java-version: ${{env.JAVA_VERSION}}
+
+      # The custom github actions help to create a setting.xml for maven with our github user and github token which has access to github packages.
+      - name: set up setting.xml
+        uses: whelk-io/maven-settings-xml-action@v14
+        with:
+          repositories: '[{ "id": "github", "name": "Sakunthalak Github Packages", "url": "${{ env.PACKAGEURL }}" }]'
+          servers: '[{ "id": "github", "username": "${{ secrets.USERNAME }}", "password": "${{ secrets.PASSWORD }}" }]'
+          profiles: '[{ "id": "github", "name": "github" }]'
+
+      - name: get release type
+        run: |
+          if ${{ github.event_name == 'push' }}
+          then
+            echo releaseTypeDefault="minor" >> $GITHUB_ENV
+          else
+            echo releaseTypeDefault="${{ github.event.inputs.name }}" >> $GITHUB_ENV
+          fi
+
+      - name: get version of the pom
+        run: |
+          cd chrome
+          mvn -DskipTests clean install
+          version=$(mvn org.apache.maven.plugins:maven-help-plugin:3.2.0:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo currentVersion="$version" >> $GITHUB_ENV
+
+      - name: increment version numnber
+        run: |
+          echo ${{ github.event.inputs.logLevel }}
+          versionToIncrement=$(./scripts/scripttoincrmentversion.sh -v "${{ env.currentVersion }}" -b "${{ env.releaseTypeDefault }}" )
+          echo newVersion="$versionToIncrement" >> $GITHUB_ENV
+
+      - name: create a jar
+        run: |
+          cd chrome
+          mvn versions:set -DnewVersion="${{ env.newVersion }}"
+          mvn versions:commit
+          mvn -DskipTests clean install
+
+      - name: push jar to github packages
+        run : |
+          cd chrome/target
+          ls -la
+          mvn deploy:deploy-file -DgroupId=chrome -DartifactId=chrome -Dversion=${{ env.newVersion }} -Dfile=chrome-${{ env.newVersion }}.jar -DrepositoryId=github -Durl=https://maven.pkg.github.com/sage/sage-people-test-automation  -DgeneratePom=true
+
+      - name: create a tag and push the pom
+        run : |
+          git config  --global user.email "${{ env.GITHUBUSEREMAIL }}"
+          git config  --global user.name  "${{ secrets.CI_GITHUBUSER }}"
+          git tag -a v${{ env.newVersion }} -m "release version ${{ env.newVersion }} chrome"
+          git push -u origin ${{ github.ref }} --tags
+          git add .
+          git commit -m "change the pom version to ${{ env.newVersion }}"
+          git push -u -f origin ${{ github.ref }} --no-verify
+
+
